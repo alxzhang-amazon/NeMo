@@ -20,3 +20,7 @@ sacrebleu  # manually install sacrebleu[ja] for Japanese support; MeCab is unsup
 sentence_transformers
 tensorstore<0.1.46
 zarr
+tenacity
+s3fs==0.4.2
+awscrt
+s3transfer
