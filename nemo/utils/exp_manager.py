@@ -53,7 +53,6 @@ from nemo.utils.model_utils import uninject_model_parallel_rank
 from nemo.utils.s3_utils import S3Utils
 
 
-
 class NotFoundError(NeMoBaseException):
     """ Raised when a file or folder is not found"""
 
@@ -616,8 +615,8 @@ def check_resume(
         '''
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
         rank = trainer.node_rank * trainer.num_devices + local_rank
-        
-        # If we are using S3 checkpointing, we want check_resume to only execute on a single rank to avoid throttling S3. 
+
+        # If we are using S3 checkpointing, we want check_resume to only execute on a single rank to avoid throttling S3.
         if rank == 0 or not S3Utils.is_s3_url(dirpath):
             checkpoint_dir_exists = False
             if S3Utils.is_s3_url(dirpath):
@@ -641,9 +640,13 @@ def check_resume(
                 dist_checkpoints = [d for d in list(checkpoint_dir.glob("*")) if d.is_dir()]
                 end_dist_checkpoints = [d for d in dist_checkpoints if d.match("*end")]
                 last_dist_checkpoints = [d for d in dist_checkpoints if d.match("*last")]
-
-                end_checkpoints = end_dist_checkpoints if end_dist_checkpoints else list(checkpoint_dir.rglob("*end.ckpt"))
-                last_checkpoints = last_dist_checkpoints if last_dist_checkpoints else list(checkpoint_dir.rglob("*last.ckpt"))
+                
+                end_checkpoints = (
+                    end_dist_checkpoints if end_dist_checkpoints else list(checkpoint_dir.rglob("*end.ckpt"))
+                )
+                last_checkpoints = (
+                    last_dist_checkpoints if last_dist_checkpoints else list(checkpoint_dir.rglob("*last.ckpt"))
+                )
 
             if not checkpoint_dir_exists or (not len(end_checkpoints) > 0 and not len(last_checkpoints) > 0):
                 if resume_ignore_no_checkpoint:
@@ -940,16 +943,18 @@ class NeMoCheckpointConnector(_CheckpointConnector):
     Wrapper around Lightning's _CheckpointConnector to use broadcasted checkpoint path in 
     distributed training settings to pre-load checkpoint.
     """
- 
-    def resume_start(self, checkpoint_path = None) -> None:
+
+    def resume_start(self, checkpoint_path=None) -> None:
         checkpoint_path = self.trainer.ckpt_path
         if checkpoint_path is not None:
             logging.info(f'Resuming from checkpoint {checkpoint_path}, rank {torch.distributed.get_rank()}')
         start_time = time.perf_counter()
         super().resume_start(checkpoint_path)
         if checkpoint_path is not None:
-            logging.info(f'Time elapsed loading checkpoint/optimizer states: {(time.perf_counter() - start_time):.2f} seconds, rank {torch.distributed.get_rank()}')
- 
+            logging.info(
+                f'Time elapsed loading checkpoint/optimizer states: {(time.perf_counter() - start_time):.2f} seconds, rank {torch.distributed.get_rank()}'
+            )
+
 
 def configure_checkpointing(
     trainer: 'pytorch_lightning.Trainer',

@@ -1,9 +1,10 @@
-import re
-import os
 import logging
+import os
+import re
 from collections import defaultdict
-from typing import List, Dict, Tuple
- 
+from typing import Dict, List, Tuple
+
+
 def parse_prefix_with_step(path: str) -> str:
     """
     Use regex to find the pattern up to "-step=900-"
@@ -11,8 +12,8 @@ def parse_prefix_with_step(path: str) -> str:
     should return s3://path/to/checkpoints/tp_rank_00_pp_rank_000/megatron_gpt--step=900-
     """
     match = re.search(r'(.*step=\d+-)', path)
- 
+
     if match:
         return match.group(1)
- 
+
     return path

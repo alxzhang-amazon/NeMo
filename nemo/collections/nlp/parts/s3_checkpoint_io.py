@@ -1,33 +1,40 @@
-from io import BytesIO
-from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Union
-from tempfile import NamedTemporaryFile
-from concurrent.futures import ProcessPoolExecutor
-import time
-import os
 import glob
-import torch
+import os
+import time
+from concurrent.futures import ProcessPoolExecutor
+from io import BytesIO
 from multiprocessing import get_start_method
-from pytorch_lightning.plugins import TorchCheckpointIO
-from lightning_fabric.plugins.io.checkpoint_io import CheckpointIO
+from pathlib import Path
+from tempfile import NamedTemporaryFile
+from typing import Any, Callable, Dict, Optional, Union
 
+import torch
+from lightning_fabric.plugins.io.checkpoint_io import CheckpointIO
+from pytorch_lightning.plugins import TorchCheckpointIO
 
 from nemo.utils import logging
-from nemo.utils.s3_utils import S3Utils
-
 from nemo.utils.checkpoint_file_utils import parse_prefix_with_step
+from nemo.utils.s3_utils import S3Utils
 
 SHARED_MEM_DIR = '/dev/shm'
 DEFAULT_CHUNK_SIZE_MB = 64
 DEFAULT_MAX_READ_CONCURRENCY = 15
 DEFAULT_MAX_WRITE_CONCURRENCY = 10
 
+
 class S3CheckpointIO(CheckpointIO):
     """A custom S3CheckpointIO module that supports checkpoint reading/writing with s3 when filepath
     is a s3 url.
     """
 
-    def __init__(self, dirpath: str, chunk_size_MB=DEFAULT_CHUNK_SIZE_MB, max_read_concurrency=DEFAULT_MAX_READ_CONCURRENCY, max_write_concurrency=DEFAULT_MAX_WRITE_CONCURRENCY, async_checkpointing=False):
+    def __init__(
+        self,
+        dirpath: str,
+        chunk_size_MB=DEFAULT_CHUNK_SIZE_MB,
+        max_read_concurrency=DEFAULT_MAX_READ_CONCURRENCY,
+        max_write_concurrency=DEFAULT_MAX_WRITE_CONCURRENCY,
+        async_checkpointing=False,
+    ):
         """
         Initialize the transfer configuration with custom values.
 
@@ -42,11 +49,14 @@ class S3CheckpointIO(CheckpointIO):
             max_write_concurrency (int, optional): The maximum number of threads that will be making
                 requests to perform an upload. Default is 10.
         """
-        if not S3Utils.is_s3_url(dirpath): raise AssertionError(f"Error attempting to initialize an S3CheckpointIO when {dirpath} is not an S3 url. Please use TorchCheckpointIO when using a non-S3 dirpath.")
-         
+        if not S3Utils.is_s3_url(dirpath):
+            raise AssertionError(
+                f"Error attempting to initialize an S3CheckpointIO when {dirpath} is not an S3 url. Please use TorchCheckpointIO when using a non-S3 dirpath."
+            )
+
         self.chunk_size_MB = chunk_size_MB
-        self.max_read_concurrency = max_read_concurrency 
-        self.max_write_concurrency = max_write_concurrency 
+        self.max_read_concurrency = max_read_concurrency
+        self.max_write_concurrency = max_write_concurrency
         self._async_checkpointing = async_checkpointing
         '''
         When using shared memory, we create a temporary file to hold the checkpoint before uploading to S3. 
@@ -60,7 +70,9 @@ class S3CheckpointIO(CheckpointIO):
 
             # Eager creating a subprocess now so that forked subprocess does not inherit cuda context from parent
             if get_start_method() == 'fork' and torch.cuda.is_initialized() is True:
-                raise Exception(f'torch.cuda should not be initialized when checkpointing subprocess is created by fork method')
+                raise Exception(
+                    f'torch.cuda should not be initialized when checkpointing subprocess is created by fork method'
+                )
             logging.info(f'Creating asynchronous checkpointing subprocess')
             future = self._executor.submit(dummy_func)
             try:
@@ -73,11 +85,9 @@ class S3CheckpointIO(CheckpointIO):
 
         super().__init__()
 
-
     @property
     def async_checkpointing(self):
         return self._async_checkpointing
-
 
     def _serialize_checkpoint_to_shm(self, checkpoint: Dict, path: str) -> str:
         """
@@ -87,10 +97,11 @@ class S3CheckpointIO(CheckpointIO):
         start_time = time.perf_counter()
         tempfile = NamedTemporaryFile(dir=SHARED_MEM_DIR, delete=False)
         torch.save(checkpoint, tempfile)
-        logging.info(f'Time elapsed saving checkpoint dict to {tempfile.name} for {path}: {(time.perf_counter() - start_time):.2f} seconds, rank {torch.distributed.get_rank()}')
+        logging.info(
+            f'Time elapsed saving checkpoint dict to {tempfile.name} for {path}: {(time.perf_counter() - start_time):.2f} seconds, rank {torch.distributed.get_rank()}'
+        )
         del checkpoint
         return tempfile.name
-    
 
     def _serialize_checkpoint_to_bytes(self, checkpoint: Dict, path: str) -> BytesIO:
         """
@@ -101,10 +112,11 @@ class S3CheckpointIO(CheckpointIO):
         bytes = BytesIO()
         torch.save(checkpoint, bytes)
         tt = time.perf_counter() - ss
-        logging.info(f'Time elapsed saving checkpoint dict to bytes for {path}: {tt:.2f} seconds, rank {torch.distributed.get_rank()}')
+        logging.info(
+            f'Time elapsed saving checkpoint dict to bytes for {path}: {tt:.2f} seconds, rank {torch.distributed.get_rank()}'
+        )
         del checkpoint
         return bytes
-    
 
     def _check_uploading_results_so_far(self):
         """
@@ -112,7 +124,7 @@ class S3CheckpointIO(CheckpointIO):
         This function checks the result of all the futures, and updates the self._futures list appropriately. 
         It also updates the list of self._temp_files, which is used to clean up leaked temporary files in SHARED_MEM during teardown. 
         """
-        if not self._futures: 
+        if not self._futures:
             return
         start_time = time.perf_counter()
         done_futures = []
@@ -129,17 +141,20 @@ class S3CheckpointIO(CheckpointIO):
             except Exception as e:
                 logging.error(f'Failed to upload {item[2]} to {item[1]}, exception: {e}')
                 raise e
-            # If the future is complete, we can remove the temp file since we choose to clear the temp file when uploading. 
+            # If the future is complete, we can remove the temp file since we choose to clear the temp file when uploading.
             try:
                 self._temp_files.remove(item[2])
             except:
-                pass # When not using shared memory, we do not append anything to the temp_files list, so remove will do nothing.  
+                pass  # When not using shared memory, we do not append anything to the temp_files list, so remove will do nothing.
         self._futures = in_progress_futures
-        logging.debug(f'Time elapsed checking uploading future results: {(time.perf_counter() - start_time):.2f} seconds')
+        logging.debug(
+            f'Time elapsed checking uploading future results: {(time.perf_counter() - start_time):.2f} seconds'
+        )
 
-    
-    def save_checkpoint(self, checkpoint: Dict[str, Any], path: Union[str, Path], storage_options: Optional[Any] = None) -> None:
-        # if we have a shared memory directory, we can serialize as a file to shared memory instead of as bytes. 
+    def save_checkpoint(
+        self, checkpoint: Dict[str, Any], path: Union[str, Path], storage_options: Optional[Any] = None
+    ) -> None:
+        # if we have a shared memory directory, we can serialize as a file to shared memory instead of as bytes.
         if os.path.exists(SHARED_MEM_DIR):
             localfile = self._serialize_checkpoint_to_shm(checkpoint, path)
             self._temp_files.append(localfile)
@@ -152,10 +167,14 @@ class S3CheckpointIO(CheckpointIO):
             self._check_uploading_results_so_far()
             logging.info(f'Uploading checkpoint to {path} in asynchronous mode, rank {torch.distributed.get_rank()}')
             if saved_as_file:
-                future = self._executor.submit(_upload_file_to_s3, localfile, path, self.chunk_size_MB, self.max_write_concurrency, True)
+                future = self._executor.submit(
+                    _upload_file_to_s3, localfile, path, self.chunk_size_MB, self.max_write_concurrency, True
+                )
                 self._futures.append((future, path, localfile))
             else:
-                future = self._executor.submit(_upload_bytes_to_s3, bytes, path, self.chunk_size_MB, self.max_write_concurrency)
+                future = self._executor.submit(
+                    _upload_bytes_to_s3, bytes, path, self.chunk_size_MB, self.max_write_concurrency
+                )
                 self._futures.append((future, path, 'bytes'))
         else:
             logging.info(f'Uploading checkpoint to {path} in synchronous mode, rank {torch.distributed.get_rank()}')
@@ -163,37 +182,35 @@ class S3CheckpointIO(CheckpointIO):
                 _upload_file_to_s3(localfile, path, self.chunk_size_MB, self.max_write_concurrency, True)
                 self._temp_files.remove(localfile)
             else:
-                _upload_bytes_to_s3(bytes, path, self.chunk_size_MB, self.max_write_concurrency)            
-
+                _upload_bytes_to_s3(bytes, path, self.chunk_size_MB, self.max_write_concurrency)
 
     def load_checkpoint(
         self, path: Union[str, Path], map_location: Optional[Callable] = lambda storage, loc: storage
-    ) -> Dict[str, Any]:        
+    ) -> Dict[str, Any]:
         if os.path.exists(SHARED_MEM_DIR):
             with NamedTemporaryFile(dir=SHARED_MEM_DIR, delete=True) as tempfile:
-                logging.info(f'Loading checkpoint {path} into a temp file in shared memory {tempfile.name}, rank {torch.distributed.get_rank()}')
+                logging.info(
+                    f'Loading checkpoint {path} into a temp file in shared memory {tempfile.name}, rank {torch.distributed.get_rank()}'
+                )
                 S3Utils.download_s3_file_to_path(
-                    s3_path=path, file_path=tempfile.name,
+                    s3_path=path,
+                    file_path=tempfile.name,
                     chunk_size_MB=self.chunk_size_MB,
                     max_concurrency=self.max_read_concurrency,
                 )
                 checkpoint = torch.load(tempfile.name)
         else:
             file_stream: BytesIO = S3Utils.download_s3_file_to_stream(
-                s3_path=path,
-                chunk_size_MB=self.chunk_size_MB,
-                max_concurrency=self.max_read_concurrency
+                s3_path=path, chunk_size_MB=self.chunk_size_MB, max_concurrency=self.max_read_concurrency
             )
             checkpoint = torch.load(file_stream)
         return checkpoint
-    
-    
+
     def remove_checkpoint(self, path: Union[str, Path]) -> None:
         if S3Utils.is_s3_url(path):
             S3Utils.remove_object(path)
         else:
             super().remove_checkpoint(path)
-
 
     def teardown(self) -> None:
         # this ensure we wait for final checkpoint to finish uploading at train end.
@@ -203,7 +220,7 @@ class S3CheckpointIO(CheckpointIO):
             start_time = time.perf_counter()
             self._executor.shutdown(wait=True)
             logging.info(f'executor shut down after {(time.perf_counter() - start_time):.2f} seconds, rank {rank}')
-        
+
         '''
         this will be non-empty at the end of training if using asynchronous uploading since the futures are not processed with _check_uploading_results_so_far.
         therefore, we check that the path exists first before trying to delete. 
@@ -229,11 +246,14 @@ def _clean_up_conflicting_checkpoint(filepath: str) -> None:
         prefix_with_step = parse_prefix_with_step(filepath)
         logging.info(f'Cleaning up conflicting checkpoint under prefix {prefix_with_step}')
 
-        conflict_last_ckpts = S3Utils.find_files_with_suffix(base_path=prefix_with_step, suffix='last.ckpt', return_key_only=False)
+        conflict_last_ckpts = S3Utils.find_files_with_suffix(
+            base_path=prefix_with_step, suffix='last.ckpt', return_key_only=False
+        )
         logging.debug(f'Found last ckpts with same step value: {conflict_last_ckpts}')
         for last_ckpt in conflict_last_ckpts:
             logging.info(f'Cleaning up conflicting last ckpt {last_ckpt} before saving {filepath}')
             S3Utils.remove_object(last_ckpt)
+
 
 def _upload_file_to_s3(localfile, path, chunk_size_MB, max_write_concurrency, remove_file):
     try:
@@ -241,6 +261,7 @@ def _upload_file_to_s3(localfile, path, chunk_size_MB, max_write_concurrency, re
         S3Utils.upload_file(localfile, path, chunk_size_MB, max_write_concurrency, remove_file)
     except Exception as e:
         raise e
+
 
 def _upload_bytes_to_s3(bytes, path, chunk_size_MB, max_write_concurrency):
     try:
@@ -252,8 +273,3 @@ def _upload_bytes_to_s3(bytes, path, chunk_size_MB, max_write_concurrency):
 
 def dummy_func():
     time.sleep(1)
-
-
-
-
-
