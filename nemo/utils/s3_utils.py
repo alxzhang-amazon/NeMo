@@ -16,9 +16,9 @@ import s3transfer
 try:
     import s3transfer.crt
     import awscrt
-    use_crt = True
+    crt_available = True
 except ImportError as e:
-    use_crt = False
+    crt_available = False
 
 MB = 1024 ** 2
 GB = 1024 ** 3
@@ -26,23 +26,17 @@ GB = 1024 ** 3
 # 400 Gbps for p4d instance, 100Gbps for g5.48xlarge
 TARGET_THROUGHPUT = 400 * GB / 8
 
-LOGGER_NAME = "s3_utils.py"
-
-# 100 MB/s limit per UploadPart request, chunk_size: time_out_seconds
-TIMEOUT_TABLE = {
-    16: 0.5,
-    32: 0.7,
-    64: 1.2,
-}
-
-# # disable logging pollution: [INFO] - credentials.py:1234 - Found credentials in shared credentials file: ~/.aws/credentials
-# logging.getLogger('botocore').setLevel(logging.WARNING)
-
 class S3Utils:
+    """
+    Utility class for interacting with S3. Handles downloading and uploading to S3, and parsing/formatting S3 urls. 
+    """
+    
+    '''
+    Avoid caching boto3 client or resource as a class variable as it gets executed once during class construction.
+    When the security token expires, the client or resouece will be no longer valid.
+    Create a new resource as needed. To avoid multithreading errors, use different session for each thread.
+    '''
     S3_PATH_PREFIX = 's3://'
-    # Avoid caching boto3 client or resource as a class variable as it gets executed once during class construction.
-    # When the security token expires, the client or resouece will be no longer valid.
-    # Create a new resource as needed. To avoid multithreading errors, use different session for each thread.
 
     @staticmethod
     def s3_path_exists(s3_path: str, match_directory: bool = False) -> bool:
@@ -59,7 +53,6 @@ class S3Utils:
         s3_client = s3.meta.client
 
         try:
-            # objs = list(bucket.objects.filter(Prefix=prefix))
             objs = s3_client.list_objects_v2(Bucket=bucket_name, MaxKeys=1, Prefix=prefix).get('Contents', [])
         except s3_client.exceptions.NoSuchBucket:
             return False
@@ -74,7 +67,7 @@ class S3Utils:
         s3_client = S3Utils._get_s3_resource(get_client=True)
         bucket, key = S3Utils.parse_s3_url(s3_path)
         s3_client.delete_object(Bucket=bucket, Key=key)
-    
+
 
     @staticmethod
     def download_s3_file_to_stream(s3_path: str, chunk_size_MB: int = 64, max_concurrency: int = 15) -> BytesIO:
@@ -92,7 +85,7 @@ class S3Utils:
 
         bytes_buffer.seek(0)
         return bytes_buffer
-    
+
 
     @staticmethod
     def download_s3_file_to_path(s3_path: str, file_path: str, chunk_size_MB: int = 64, max_concurrency: int = 15) -> None:
@@ -106,8 +99,8 @@ class S3Utils:
         _download_file_with_retry(s3_client, bucket, key, file_path, config)
         logging.info(f'Time elapsed downloading {s3_path} to {file_path} with chunk_size={chunk_size_MB}MB '
                     f'and max_concurrency={max_concurrency}: {(time.perf_counter() - start_time):.2f} seconds')
-        
-    
+
+
     @staticmethod
     def upload_file_stream_to_s3(bytes_buffer: BytesIO, s3_path: str, chunk_size_MB: int = 64, max_concurrency: int = 10) -> None:
         s3_client = S3Utils._get_s3_resource(get_client=True)
@@ -120,23 +113,24 @@ class S3Utils:
         _upload_fileobj_with_retry(s3_client, bytes_buffer, bucket, key, config)
         logging.info(f'Time elapsed uploading bytes buffer to {s3_path} with chunk_size={chunk_size_MB}MB '
                     f'and max_concurrency={max_concurrency}: {(time.perf_counter() - start_time):.2f} seconds')
-    
+
 
     @staticmethod
-    def upload_file_with_crt(file_path: str, s3_path: str, chunk_size_MB=16, max_concurrency=10, remove_file=False):
-        if not use_crt:
+    def upload_file(file_path: str, s3_path: str, chunk_size_MB=16, max_concurrency=10, remove_file=False):
+        total_size = os.path.getsize(file_path)
+        assert total_size > 0, f"file size is zero, {file_path}"
+
+        if not crt_available:
             upload_file_to_s3(file_path=file_path, s3_path=s3_path)
             return
         bucket_name, key_name = S3Utils.parse_s3_url(s3_path)
-        total_size = os.path.getsize(file_path)
-        assert total_size > 0, f"file size is zero, {file_path}"
         logging.info(f'Uploading {file_path} to {s3_path} with chunk_size={chunk_size_MB}MB and max_threads={max_concurrency}')
         start_time = time.perf_counter()
         session = get_session()
         request_serializer = s3transfer.crt.BotocoreCRTRequestSerializer(session)
         credential_resolver = session.get_credentials()
         provider = s3transfer.crt.BotocoreCRTCredentialsWrapper(credential_resolver).to_crt_credentials_provider()
-        
+
         s3_crt_client = s3transfer.crt.create_s3_crt_client(
             region=boto3.Session().region_name,
             crt_credentials_provider=provider,
@@ -177,13 +171,10 @@ class S3Utils:
             objects_list = list(filter(lambda o: o.key.endswith(suffix), objects_list))
 
         if return_key_only:
-            final_list = list(map(lambda o: o.key, objects_list))
+            return [o.key for o in objects_list]
         else:
-            final_list = [S3Utils.build_s3_url(o.bucket_name, o.key) for o in objects_list]
+            return [S3Utils.build_s3_url(o.bucket_name, o.key) for o in objects_list]
 
-        return final_list
-    
-    
 
     @staticmethod
     def _get_s3_resource(profile: str = None, creds: botocore.credentials.Credentials = None, get_client: bool = False, session=None, config={}):
@@ -208,7 +199,7 @@ class S3Utils:
             return s3.meta.client
         else:
             return s3
-    
+
 
     @staticmethod
     def parse_s3_url(s3_url: str) -> Optional[Tuple[str, str]]:
@@ -238,7 +229,7 @@ def _scan_objects_with_retry(s3_bucket, s3_prefix):
     objects = s3_bucket.objects.filter(Prefix=s3_prefix)
     return list(objects)
 
-    
+
 def is_slow_down_error(exception):
     class_name = exception.__class__.__name__
     module_name = exception.__class__.__module__
@@ -253,8 +244,8 @@ def is_slow_down_error(exception):
         "<Code>InternalError</Code>" in message):
         logging.info("Identified the Retriable Error retrying the job")
         return True
-    
-    if use_crt and isinstance(exception, awscrt.exceptions.AwsCrtError):
+
+    if crt_available and isinstance(exception, awscrt.exceptions.AwsCrtError):
         logging.error(f'Caught awscrt.exceptions.AwsCrtError: {exception.__repr__()}')
         return True
 
@@ -295,8 +286,8 @@ def _download_file_with_retry(s3_client, bucket: str, key: str, file_path: str, 
 )
 def _upload_fileobj_with_retry(s3_client, bytes_buffer: BytesIO, bucket: str, key: str, config: TransferConfig = None):
     s3_client.upload_fileobj(bytes_buffer, bucket, key, Config=config)
-    
-        
+
+
 @retry(
 wait=wait_exponential(multiplier=1, min=1, max=16),
 stop=stop_after_delay(5*60),
@@ -326,7 +317,7 @@ def upload_file_to_s3(file_path: str, s3_path: str, chunk_size_MB: int = 64, max
             os.remove(file_path)
         logging.info(f'Time elapsed uploading file {file_path} to {s3_path} with chunk_size={chunk_size_MB}MB '
                     f'and max_concurrency={max_concurrency}: {(time.perf_counter() - start_time):.2f} seconds')
-        
+
 
 @retry(
     wait=wait_exponential(multiplier=1, min=1, max=16),

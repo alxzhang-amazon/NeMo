@@ -610,14 +610,16 @@ def check_resume(
     if resume_from_checkpoint:
         checkpoint = resume_from_checkpoint
     if resume_if_exists:
-        # attach valid checkpoint path to trainer if current rank is rank zero of any data parallel groups
-        # this limit to only global rank 0 process calling s3, instead of all processes calling s3
+        '''
+        attach valid checkpoint path to trainer if current rank is rank zero of any data parallel groups
+        this limit to only global rank 0 process calling s3, instead of all processes calling s3
+        '''
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
         rank = trainer.node_rank * trainer.num_devices + local_rank
         
         # If we are using S3 checkpointing, we want check_resume to only execute on a single rank to avoid throttling S3. 
         if rank == 0 or not S3Utils.is_s3_url(dirpath):
-            checkpoint_dir_exists = None
+            checkpoint_dir_exists = False
             if S3Utils.is_s3_url(dirpath):
                 checkpoint_dir = dirpath
                 checkpoint_dir_exists = S3Utils.s3_path_exists(checkpoint_dir, match_directory=True)
@@ -940,15 +942,13 @@ class NeMoCheckpointConnector(_CheckpointConnector):
     """
  
     def resume_start(self, checkpoint_path = None) -> None:
-        logging.info("NeMoCheckpointConnector resume_start begin")
         checkpoint_path = self.trainer.ckpt_path
-        logging.info(f"NeMoCheckpointConnector resume_start checkpoint_path: {checkpoint_path}")
         if checkpoint_path is not None:
             logging.info(f'Resuming from checkpoint {checkpoint_path}, rank {torch.distributed.get_rank()}')
         start_time = time.perf_counter()
         super().resume_start(checkpoint_path)
         if checkpoint_path is not None:
-            logging.info(f'Time elapsed loading and broadcasting checkpoint/optimizer states: {(time.perf_counter() - start_time):.2f} seconds, rank {torch.distributed.get_rank()}')
+            logging.info(f'Time elapsed loading checkpoint/optimizer states: {(time.perf_counter() - start_time):.2f} seconds, rank {torch.distributed.get_rank()}')
  
 
 def configure_checkpointing(
